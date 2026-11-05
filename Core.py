@@ -1,0 +1,49 @@
+from enum import Enum
+
+Core = Enum('Core',
+	# Keyword
+	'AND,\
+	BEGIN,\
+	CASE,\
+	DO,\
+	ELSE,\
+	END,\
+	FOR,\
+	IF,\
+	IN,\
+	INTEGER,\
+	IS,\
+	NEW,\
+	NOT,\
+	OBJECT,\
+	OR,\
+	PRINT,\
+	PROCEDURE,\
+	READ,\
+	RETURN,\
+	THEN,'
+	# Symbols
+	'ADD,\
+	SUBTRACT,\
+	MULTIPLY,\
+	DIVIDE,\
+	ASSIGN,\
+	EQUAL,\
+	LESS,\
+	COLON,\
+	SEMICOLON,\
+	PERIOD,\
+	COMMA,\
+	LPAREN,\
+	RPAREN,\
+	LSQUARE,\
+	RSQUARE,\
+	LCURL,\
+	RCURL,'
+	# Special
+	'CONST,\
+	ID,\
+	STRING,\
+	EOS,\
+	ERROR'
+)
