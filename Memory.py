@@ -3,7 +3,7 @@ class Memory:
     def __init__(self, dataScanner):
        # Initialize the Memory class with a global scope and a list of local scopes
        self.globalScope = {}
-       self.localScopes = []
+       self.callstack = [[]]
        self.dataScanner = dataScanner
 
     def error(self, message):
@@ -13,25 +13,25 @@ class Memory:
 
     def enter_scope(self):
         # Enter a new local scope by appending an empty dictionary to the list of local scopes
-        self.localScopes.append({})
+        self.callstack[-1].append({})
 
     def exit_scope(self):
         # Exit the current local scope by popping the last dictionary from the list of local scopes
-        if self.localScopes:
-            self.localScopes.pop()
+        if self.callstack[-1]:
+            self.callstack[-1].pop()
         else:
             self.error("No local scope to exit.")
 
     def current_scope(self):
         # Return the current local scope, or the global scope if no local scopes exist
-        if self.localScopes:
-            return self.localScopes[-1]
+        if self.callstack[-1]:
+            return self.callstack[-1][-1]
         else:
             return self.globalScope
 
     def find_variable(self, name):
         # Find a variable by name in the current local scope or global scope
-        for scope in reversed(self.localScopes):
+        for scope in reversed(self.callstack[-1]):
             if name in scope:
                 return scope[name]
         if name in self.globalScope:
