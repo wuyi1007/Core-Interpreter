@@ -1,4 +1,3 @@
-
 from Core import Core
 from Scanner import Scanner
 
@@ -114,37 +113,47 @@ class Procedure:
         memory.exit_scope()
 
 # <decl-seq> ::= <decl> | <decl><decl-seq>
+# new <decl-seq> ::= <decl> | <decl><decl-seq> | <function> | <function><decl-seq>
 class DecSeq:
     def __init__(self):
         self.decl = None
         self.declSeq = None
+        self.function = None
 
     # Parse the declaration sequence
     def parse(self, parser: Parser):
-        self.decl = Decl()
-        self.decl.parse(parser)
-
         current_Token = parser.scanner.currentToken()
-        # The first set of <decl-seq> is { INTEGER, OBJECT }
-        # If the current token is either of these, parse the next declaration sequence
         if current_Token == Core.INTEGER or current_Token == Core.OBJECT:
+            self.decl = Decl()
+            self.decl.parse(parser)
+        elif current_Token == Core.PROCEDURE:
+            self.function = Function()
+            self.function.parse(parser)
+        else:
+            parser.error("Invalid derivation for <decl-seq>: expected " + 
+                         Core.INTEGER.name + 
+                         " or " + Core.OBJECT.name + 
+                         " or " + Core.PROCEDURE.name + 
+                         " but found " + current_Token.name)
+        current_Token = parser.scanner.currentToken()
+        if current_Token == Core.INTEGER or current_Token == Core.OBJECT or current_Token == Core.PROCEDURE:
             self.declSeq = DecSeq()
             self.declSeq.parse(parser)
 
     # Print the declaration sequence
     def print(self, indent=1):
-        self.decl.print(indent)
+        self.decl.print(indent) if self.decl is not None else self.function.print(indent)
         if self.declSeq is not None:
             self.declSeq.print(indent)
 
     # Perform semantic analysis on the declaration, and declaration sequence when applicable
     def semanticCheck(self, semantic_Checker):
-        self.decl.semanticCheck(semantic_Checker)
+        self.decl.semanticCheck(semantic_Checker) if self.decl is not None else self.function.semanticCheck(semantic_Checker)
         if self.declSeq is not None:
             self.declSeq.semanticCheck(semantic_Checker)
 
     def execute(self, memory):
-        self.decl.execute(memory)
+        self.decl.execute(memory) if self.decl is not None else self.function.execute(memory)
         if self.declSeq is not None:
             self.declSeq.execute(memory)
 
@@ -247,6 +256,82 @@ class Decl_Obj:
     def execute(self, memory):
         memory.declare_object(self.objectID)
 
+# <function> ::= procedure ID ( object <parameters> ) is <stmt-seq> end
+class Function:
+    def __init__(self):
+        self.parameters = None
+        self.stmtSeq = None
+        self.id = None
+
+    # Parse the function
+    def parse(self, parser: Parser):
+        parser.match(Core.PROCEDURE, "<function>")
+        self.id = parser.scanner.getID()
+        parser.match(Core.ID, "<function>")
+        parser.match(Core.LPAREN, "<function>")
+        parser.match(Core.OBJECT, "<function>")
+        self.parameters = Parameters()
+        self.parameters.parse(parser)
+        parser.match(Core.RPAREN, "<function>")
+        parser.match(Core.IS, "<function>")
+        self.stmtSeq = StmtSeq()
+        self.stmtSeq.parse(parser)
+        parser.match(Core.END, "<function>")
+
+    # Print the function
+    def print(self, indent=1):
+        prefix = "  " * indent
+        print(prefix + "procedure " + self.id + " (object ", end='')
+        self.parameters.print()
+        print(") is ")
+        self.stmtSeq.print(indent + 1)
+        print(prefix + "end")
+
+    # Perform semantic analysis on the function
+    def semanticCheck(self, semantic_Checker):
+        self.parameters.semanticCheck(semantic_Checker)
+        self.stmtSeq.semanticCheck(semantic_Checker)
+
+    def execute(self, memory):
+        self.parameters.execute(memory)
+        self.stmtSeq.execute(memory)
+
+class Parameters:
+    def __init__(self):
+        self.parameterList = []
+
+    # Parse the parameters
+    def parse(self, parser: Parser):
+        # Parse the parameter list
+        if parser.scanner.currentToken() != Core.ID:
+            parser.error("Invalid derivation for <parameters>: expected " + 
+                Core.ID.name + 
+                " but found " + 
+                parser.scanner.currentToken().name)
+        while parser.scanner.currentToken() == Core.ID:
+            self.parameterList.append(parser.scanner.getID())
+            parser.scanner.nextToken()
+            if parser.scanner.currentToken() == Core.COMMA:
+                parser.scanner.nextToken()
+                if parser.scanner.currentToken() != Core.ID:
+                    parser.error("Invalid derivation for <parameters>: expected " + 
+                        Core.ID.name + 
+                        " but found " + 
+                        parser.scanner.currentToken().name)
+
+    # Print the parameters
+    def print(self):
+        print(", ".join(self.parameterList), end='')
+
+    # Perform semantic analysis on the parameters
+    def semanticCheck(self, semantic_Checker):
+        for param in self.parameterList:
+            semantic_Checker.declare(param, "parameter")
+
+    def execute(self, memory):
+        for param in self.parameterList:
+            memory.declare_parameter(param)
+
 # <stmt-seq> ::= <stmt> | <stmt><stmt-seq>
 class StmtSeq:
     def __init__(self):
@@ -262,7 +347,7 @@ class StmtSeq:
         # Parse the optional statement sequence
         # The first set for statement sequence is {id, if, for, print, read, object, integer}
         current_Token = parser.scanner.currentToken()
-        if current_Token in (Core.ID, Core.IF, Core.FOR, Core.PRINT, Core.READ, Core.OBJECT, Core.INTEGER):
+        if current_Token in (Core.ID, Core.IF, Core.FOR, Core.PRINT, Core.READ, Core.OBJECT, Core.INTEGER, Core.BEGIN):
             self.stmtSeq = StmtSeq()
             self.stmtSeq.parse(parser)
 
@@ -284,6 +369,7 @@ class StmtSeq:
             self.stmtSeq.execute(memory)
 
 # <stmt> ::= <assign> | <if> | <loop> | <print> | <read> | <decl>
+# new <stmt> ::= <assign> | <if> | <loop> | <print> | <read> | <decl> | <call>
 class Stmt:
     def __init__(self):
         self.statement = None
@@ -310,6 +396,9 @@ class Stmt:
         # The first set for declaration statement is {object, integer}
         elif current_Token in (Core.OBJECT, Core.INTEGER):
             self.statement = Decl()
+        # The first set for call statement is {begin}
+        elif current_Token == Core.BEGIN:
+            self.statement = Call()
         # Report an error if the token is not in any of the first sets
         else:
             parser.error("Invalid derivation for <stmt>: expected " + 
@@ -701,6 +790,41 @@ class Read:
 
     def execute(self, memory):
         memory.set_value(self.id, memory.read())
+
+# <call> ::= begin ID ( <parameters> );
+class Call:
+    def __init__(self):
+        self.id = None
+        self.parameters = None
+
+    # Parse the call statement
+    def parse(self, parser: Parser):
+        parser.match(Core.BEGIN, "<call>")
+
+        self.id = parser.scanner.getID()
+        parser.match(Core.ID, "<call>")
+
+        parser.match(Core.LPAREN, "<call>")
+        self.parameters = Parameters()
+        self.parameters.parse(parser)
+        parser.match(Core.RPAREN, "<call>")
+        parser.match(Core.SEMICOLON, "<call>")
+
+    # Pretty print the call statement
+    def print(self, indent=1):
+        prefix = "  " * indent
+        print(prefix + "begin " + self.id + " ( ", end='')
+        self.parameters.print()
+        print(" );")
+
+    # Verify that the id is declared as a procedure
+    def semanticCheck(self, semantic_Checker):
+        semantic_Checker.procCheck(self.id)
+        self.parameters.semanticCheck(semantic_Checker)
+
+    def execute(self, memory):
+        memory.call_procedure(self.id, self.parameters.parameterList)
+    
 
 # <cond> ::= <cmpr> | not <cond> | [ <cond> ] | <cmpr> or <cond> | <cmpr> and <cond>
 class Cond:
