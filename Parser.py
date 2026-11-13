@@ -100,6 +100,10 @@ class Procedure:
     # Continue semantic analysis on Statement Sequence, and Declaration Sequence when applicable
     def semanticCheck(self, semantic_Checker):
         if self.ds is not None:
+            # New: Collect procedures before semantic analysis
+            self.ds.collect_procedures(semantic_Checker)
+            if self.name in semantic_Checker.procedures:
+                semantic_Checker.error("Procedure " + self.name + " already declared.")
             self.ds.semanticCheck(semantic_Checker)
         semantic_Checker.scopes.append({})
         self.ss.semanticCheck(semantic_Checker)
@@ -111,6 +115,8 @@ class Procedure:
         memory.enter_scope()
         self.ss.execute(memory)
         memory.exit_scope()
+        memory.exit_global_scope()
+        
 
 # <decl-seq> ::= <decl> | <decl><decl-seq>
 # new <decl-seq> ::= <decl> | <decl><decl-seq> | <function> | <function><decl-seq>
@@ -126,6 +132,7 @@ class DecSeq:
         if current_Token == Core.INTEGER or current_Token == Core.OBJECT:
             self.decl = Decl()
             self.decl.parse(parser)
+        # New: The first set of <function> is { PROCEDURE }
         elif current_Token == Core.PROCEDURE:
             self.function = Function()
             self.function.parse(parser)
@@ -146,6 +153,13 @@ class DecSeq:
         if self.declSeq is not None:
             self.declSeq.print(indent)
 
+    # Recursively collect procedures from nested declaration sequences
+    def collect_procedures(self, semantic_Checker):
+        if self.function is not None:
+            semantic_Checker.declare_procedure(self.function.id)
+        if self.declSeq is not None:
+            self.declSeq.collect_procedures(semantic_Checker)
+
     # Perform semantic analysis on the declaration, and declaration sequence when applicable
     def semanticCheck(self, semantic_Checker):
         self.decl.semanticCheck(semantic_Checker) if self.decl is not None else self.function.semanticCheck(semantic_Checker)
@@ -153,7 +167,11 @@ class DecSeq:
             self.declSeq.semanticCheck(semantic_Checker)
 
     def execute(self, memory):
-        self.decl.execute(memory) if self.decl is not None else self.function.execute(memory)
+        # Register the function in memory if this is a function declaration
+        if self.decl is None:
+            memory.functions[self.function.id] = self.function
+        else:
+            self.decl.execute(memory)
         if self.declSeq is not None:
             self.declSeq.execute(memory)
 
@@ -289,12 +307,16 @@ class Function:
 
     # Perform semantic analysis on the function
     def semanticCheck(self, semantic_Checker):
+        # Create a new separate scope for the function
+        semantic_Checker.scopes.append({})
+        # New: Semantic check the parameters and statement sequence within the function scope
         self.parameters.semanticCheck(semantic_Checker)
         self.stmtSeq.semanticCheck(semantic_Checker)
-
+        semantic_Checker.scopes.pop()
+        
     def execute(self, memory):
-        self.parameters.execute(memory)
-        self.stmtSeq.execute(memory)
+        # No execution is required for the function declaration itself
+        pass
 
 class Parameters:
     def __init__(self):
@@ -308,16 +330,20 @@ class Parameters:
                 Core.ID.name + 
                 " but found " + 
                 parser.scanner.currentToken().name)
-        while parser.scanner.currentToken() == Core.ID:
+        self.parameterList.append(parser.scanner.getID())
+        parser.scanner.nextToken()
+        
+        # Parse the comma-separated parameter list
+        while parser.scanner.currentToken() == Core.COMMA:
+            parser.scanner.nextToken()
+            # Handle edge case where a comma is followed by a non-identifier token
+            if parser.scanner.currentToken() != Core.ID:
+                parser.error("Invalid derivation for <parameters>: expected " + 
+                    Core.ID.name + 
+                    " but found " + 
+                    parser.scanner.currentToken().name)
             self.parameterList.append(parser.scanner.getID())
             parser.scanner.nextToken()
-            if parser.scanner.currentToken() == Core.COMMA:
-                parser.scanner.nextToken()
-                if parser.scanner.currentToken() != Core.ID:
-                    parser.error("Invalid derivation for <parameters>: expected " + 
-                        Core.ID.name + 
-                        " but found " + 
-                        parser.scanner.currentToken().name)
 
     # Print the parameters
     def print(self):
@@ -326,11 +352,11 @@ class Parameters:
     # Perform semantic analysis on the parameters
     def semanticCheck(self, semantic_Checker):
         for param in self.parameterList:
-            semantic_Checker.declare(param, "parameter")
+            semantic_Checker.declare(param, "object")
 
     def execute(self, memory):
-        for param in self.parameterList:
-            memory.declare_parameter(param)
+        # No execution is required for the parameters themselves
+        pass
 
 # <stmt-seq> ::= <stmt> | <stmt><stmt-seq>
 class StmtSeq:
@@ -407,8 +433,9 @@ class Stmt:
                 Core.FOR.name + ", " + 
                 Core.PRINT.name + ", " + 
                 Core.READ.name + ", " + 
-                Core.OBJECT.name + ", or " + 
-                Core.INTEGER.name + " but found " + 
+                Core.OBJECT.name + ", " + 
+                Core.INTEGER.name + ", or " + 
+                Core.BEGIN.name + " but found " +
                 current_Token.name)
         self.statement.parse(parser)
 
@@ -819,11 +846,25 @@ class Call:
 
     # Verify that the id is declared as a procedure
     def semanticCheck(self, semantic_Checker):
-        semantic_Checker.procCheck(self.id)
-        self.parameters.semanticCheck(semantic_Checker)
+        if self.id not in semantic_Checker.procedures:
+            semantic_Checker.error("procedure " + self.id + " not declared")
 
     def execute(self, memory):
-        memory.call_procedure(self.id, self.parameters.parameterList)
+        # Obtain the argument values from memory
+        arguments = self.parameters.parameterList
+        # Verify that the number of arguments matches the number of parameters
+        if len(arguments) != len(memory.functions[self.id].parameters.parameterList):
+            memory.error("Incorrect number of arguments for procedure " + self.id)
+        arguments = [memory.find_variable(argument) for argument in arguments]
+
+        # Enter a new frame for the function call
+        memory.enter_frame()
+        # Bind each argument to its corresponding parameter
+        for argument, parameter in zip(arguments, memory.functions[self.id].parameters.parameterList):
+            memory.bind_object(parameter, argument)
+        memory.functions[self.id].stmtSeq.execute(memory)
+        # Exit the function frame after execution
+        memory.exit_frame()
     
 
 # <cond> ::= <cmpr> | not <cond> | [ <cond> ] | <cmpr> or <cond> | <cmpr> and <cond>
@@ -1171,6 +1212,7 @@ class SemanticChecker:
         # self.scopes[0] is the global scope; self.scopes[1] is the first nested scope, etc.
         # Use append to enter the new scope, and pop to exit the current scope
         self.scopes = [{}]
+        self.procedures = set()
     # verify that a variable is declared
     def verify(self, variable):
         for scope in reversed(self.scopes):
@@ -1192,3 +1234,9 @@ class SemanticChecker:
         variableType = self.verify(variable)
         if variableType != "object":
             self.error("variable " + variable + " is not an object")
+    # Declare a procedure
+    def declare_procedure(self, procedure):
+        # Fulfill the requirement that each procedure is declared only once
+        if procedure in self.procedures:
+            self.error("procedure " + procedure + " already declared")
+        self.procedures.add(procedure)
