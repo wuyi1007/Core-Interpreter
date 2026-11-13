@@ -4,23 +4,65 @@ class Memory:
        # Initialize the Memory class with a global scope and a list of local scopes
        self.globalScope = {}
        self.callstack = [[]]
+       self.functions = {}
        self.dataScanner = dataScanner
+
+       self.reachableObjects = 0
 
     def error(self, message):
         # Handle errors by printing the error message
         print("ERROR: " + message)
         raise SystemExit
 
+    def enter_frame(self):
+        # Enter a new call frame by appending an empty list to the call stack
+        self.callstack.append([{}])
+
+    # Exit the current call frame and release any object references it holds
+    def exit_frame(self):
+        if len(self.callstack) > 1:
+            for scope in self.callstack[-1]:
+                for entry in scope.values():
+                    if entry["type"] == "object" and entry["value"] is not None:
+                        entry["value"]["refCount"] -= 1
+                        if entry["value"]["refCount"] == 0:
+                            entry["value"] = None
+                            self.reachableObjects -= 1
+                            print("gc:" + str(self.reachableObjects))
+            self.callstack.pop()
+        else:
+            self.error("No frame to exit.")
+
     def enter_scope(self):
         # Enter a new local scope by appending an empty dictionary to the list of local scopes
         self.callstack[-1].append({})
 
+    # Exit the current local scope and release any object references it holds
     def exit_scope(self):
         # Exit the current local scope by popping the last dictionary from the list of local scopes
         if self.callstack[-1]:
+            for entry in self.callstack[-1][-1].values():
+                if entry["type"] == "object" and entry["value"] is not None:
+                    entry["value"]["refCount"] -= 1
+                    if entry["value"]["refCount"] == 0:
+                        entry["value"] = None
+                        self.reachableObjects -= 1
+                        print("gc:" + str(self.reachableObjects))
             self.callstack[-1].pop()
         else:
             self.error("No local scope to exit.")
+
+    # Exit the global scope and release any object references it holds
+    def exit_global_scope(self):
+        # Exit the global scope by clearing the global scope dictionary
+        for entry in self.globalScope.values():
+            if entry["type"] == "object" and entry["value"] is not None:
+                entry["value"]["refCount"] -= 1
+                if entry["value"]["refCount"] == 0:
+                    entry["value"] = None
+                    self.reachableObjects -= 1
+                    print("gc:" + str(self.reachableObjects))
+        self.globalScope.clear()
 
     def current_scope(self):
         # Return the current local scope, or the global scope if no local scopes exist
@@ -71,7 +113,15 @@ class Memory:
         entry = self.find_variable(name)
         if entry["type"] != "object":
             self.error("Variable " + name + " is not an object.")
-        entry["value"] = {"values" : {key: value}, "defaultKey": key}  # Store the default key for later retrieval
+        if entry["value"] is not None:
+            entry["value"]["refCount"] -= 1
+            if entry["value"]["refCount"] == 0:
+                entry["value"] = None
+                self.reachableObjects -= 1
+                print("gc:" + str(self.reachableObjects))
+        entry["value"] = {"values" : {key: value}, "defaultKey": key, "refCount": 1}  # Initialize the reference count
+        self.reachableObjects += 1
+        print("gc:" + str(self.reachableObjects))
 
     def get_object(self, name):
         # Get the object variable by name
@@ -104,13 +154,27 @@ class Memory:
             obj = self.get_object(name)
             obj["values"][obj["defaultKey"]] = value
 
+    # Bind an object argument to a parameter in the current scope (function call)
+    def bind_object(self, name, argument):
+        self.current_scope()[name] = {"type": "object", "value": argument["value"]}
+        if argument["value"] is not None:
+            argument["value"]["refCount"] += 1
+
     def reference(self, id1, id2):
         # Return a reference to a variable by name in the current local scope or global scope
         entry1 = self.find_variable(id1)
         entry2 = self.find_variable(id2)
         if entry1["type"] != "object" or entry2["type"] != "object":
             self.error("Both variables must be objects to reference the same object.")
-        entry1["value"] = entry2["value"]
+        if entry1["value"] is not entry2["value"]:
+            if entry1["value"] is not None:
+                entry1["value"]["refCount"] -= 1
+                if entry1["value"]["refCount"] == 0:
+                    self.reachableObjects -= 1
+                    print("gc:" + str(self.reachableObjects))
+            if entry2["value"] is not None:
+                entry2["value"]["refCount"] += 1
+            entry1["value"] = entry2["value"]
 
     def read(self):
         # Read an integer value from the data scanner and return it
